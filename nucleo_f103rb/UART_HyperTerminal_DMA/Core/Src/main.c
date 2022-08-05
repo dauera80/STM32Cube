@@ -44,7 +44,11 @@ DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
+/* Buffer used for transmission */
+uint8_t aTxBuffer[] = "\n\r ****UART-Hyperterminal communication based on DMA****\n\r Enter 10 characters using keyboard :\n\r";
 
+/* Buffer used for reception */
+uint8_t aRxBuffer[RXBUFFERSIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -97,11 +101,59 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  /*##-2- Start the transmission process #####################################*/
+  /* User start transmission data through "TxBuffer" buffer */
+  if (HAL_UART_Transmit_DMA(&huart2, (uint8_t *)aTxBuffer, TXBUFFERSIZE) != HAL_OK)
+  {
+    /* Transfer error in transmission process */
+    Error_Handler();
+  }
+
+  /*##-3- Put UART peripheral in reception process ###########################*/
+  /* Any data received will be stored in "RxBuffer" buffer : the number max of
+       data received is 10 */
+  if (HAL_UART_Receive_DMA(&huart2, (uint8_t *)aRxBuffer, RXBUFFERSIZE) != HAL_OK)
+  {
+    /* Transfer error in reception process */
+    Error_Handler();
+  }
+
+  /*##-4- Wait for the end of the transfer ###################################*/
+  /*  Before starting a new communication transfer, you need to check the current
+        state of the peripheral; if it�s busy you need to wait for the end of current
+        transfer before starting a new one.
+        For simplicity reasons, this example is just waiting till the end of the
+        transfer, but application may perform other tasks while transfer operation
+        is ongoing. */
+  while (HAL_UART_GetState(&huart2) != HAL_UART_STATE_READY)
+  {
+  }
+
+  /*##-5- Send the received Buffer ###########################################*/
+  if (HAL_UART_Transmit_DMA(&huart2, (uint8_t *)aRxBuffer, RXBUFFERSIZE) != HAL_OK)
+  {
+    /* Transfer error in transmission process */
+    Error_Handler();
+  }
+
+  /*##-6- Wait for the end of the transfer ###################################*/
+  /*  Before starting a new communication transfer, you need to check the current
+        state of the peripheral; if it�s busy you need to wait for the end of current
+        transfer before starting a new one.
+        For simplicity reasons, this example is just waiting till the end of the
+        transfer, but application may perform other tasks while transfer operation
+        is ongoing. */
+  while (HAL_UART_GetState(&huart2) != HAL_UART_STATE_READY)
+  {
+  }
+
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+    HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
@@ -234,7 +286,44 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief  Tx Transfer completed callback
+  * @param  huart: UART handle.
+  * @note   This example shows a simple way to report end of DMA Tx transfer, and
+  *         you can add your own implementation.
+  * @retval None
+  */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  /* Toogle LED2 : Transfer in transmission process is correct */
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+}
 
+/**
+  * @brief  Rx Transfer completed callback
+  * @param  huart: UART handle
+  * @note   This example shows a simple way to report end of DMA Rx transfer, and
+  *         you can add your own implementation.
+  * @retval None
+  */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  /* Turn LED2 on: Transfer in reception process is correct */
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+}
+
+/**
+  * @brief  UART error callbacks
+  * @param  huart: UART handle
+  * @note   This example shows a simple way to report transfer error, and you can
+  *         add your own implementation.
+  * @retval None
+  */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  /* Turn LED2 off: Transfer error in reception/transmission process */
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+}
 /* USER CODE END 4 */
 
 /**
