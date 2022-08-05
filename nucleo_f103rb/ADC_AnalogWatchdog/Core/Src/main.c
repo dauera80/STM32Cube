@@ -31,6 +31,16 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define RANGE_12BITS                   ((uint32_t) 4095)    /* Max value with a full range of 12 bits */
+#define USERBUTTON_CLICK_COUNT_MAX     ((uint32_t)    4)    /* Maximum value of variable "UserButtonClickCount" */
+
+#define ADCCONVERTEDVALUES_BUFFER_SIZE ((uint32_t) 256)     /* Size of array containing ADC converted values */
+
+#if defined(ADC_TRIGGER_FROM_TIMER)
+#define TIMER_FREQUENCY                ((uint32_t) 1000)    /* Timer frequency (unit: Hz). With a timer 16 bits and time base freq min 1Hz, range is min=1Hz, max=32kHz. */
+#define TIMER_FREQUENCY_RANGE_MIN      ((uint32_t)    1)    /* Timer minimum frequency (unit: Hz). With a timer 16 bits, maximum frequency will be 32000 times this value. */
+#define TIMER_PRESCALER_MAX_VALUE      (0xFFFF-1)           /* Timer prescaler maximum value (0xFFFF for a timer 16 bits) */
+#endif /* ADC_TRIGGER_FROM_TIMER */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -42,6 +52,22 @@
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+/* Note: This example, on some other STM32 boards, is performing              */
+/*       DAC handler declaration here.                                        */
+/*       On STM32F103RB-Nucleo, the device has no DAC available,              */
+/*       therefore analog signal must be supplied externally.                 */
+
+/* Variable containing ADC conversions results */
+__IO uint16_t   aADCxConvertedValues[ADCCONVERTEDVALUES_BUFFER_SIZE];
+
+/* Variable to report ADC analog watchdog status:   */
+/*   RESET <=> voltage into AWD window   */
+/*   SET   <=> voltage out of AWD window */
+uint8_t         ubAnalogWatchdogStatus = RESET;  /* Set into analog watchdog interrupt callback */
+
+/* Variables to manage push button on board: interface between ExtLine interruption and main program */
+uint8_t         ubUserButtonClickCount = 0;      /* Count number of clicks: Incremented after User Button interrupt */
+__IO uint8_t    ubUserButtonClickEvent = RESET;  /* Event detection: Set after User Button interrupt */
 
 /* USER CODE END PV */
 
@@ -193,7 +219,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
@@ -205,13 +231,37 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 15, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief EXTI line detection callbacks
+  * @param GPIO_Pin: Specifies the pins connected EXTI line
+  * @retval None
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == B1_Pin)
+  {
+    /* Set variable to report push button event to main program */
+    ubUserButtonClickEvent = SET;
 
+    /* Manage ubUserButtonClickCount to increment it circularly from 0 to     */
+    /* maximum value defined                                                  */
+    if (ubUserButtonClickCount < USERBUTTON_CLICK_COUNT_MAX)
+    {
+      ubUserButtonClickCount++;
+    }
+    else
+    {
+      ubUserButtonClickCount=0;
+    }
+
+  }
+}
 /* USER CODE END 4 */
 
 /**
