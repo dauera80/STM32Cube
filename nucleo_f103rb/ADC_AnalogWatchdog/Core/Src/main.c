@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,12 +35,6 @@
 #define USERBUTTON_CLICK_COUNT_MAX     ((uint32_t)    4)    /* Maximum value of variable "UserButtonClickCount" */
 
 #define ADCCONVERTEDVALUES_BUFFER_SIZE ((uint32_t) 256)     /* Size of array containing ADC converted values */
-
-#if defined(ADC_TRIGGER_FROM_TIMER)
-#define TIMER_FREQUENCY                ((uint32_t) 1000)    /* Timer frequency (unit: Hz). With a timer 16 bits and time base freq min 1Hz, range is min=1Hz, max=32kHz. */
-#define TIMER_FREQUENCY_RANGE_MIN      ((uint32_t)    1)    /* Timer minimum frequency (unit: Hz). With a timer 16 bits, maximum frequency will be 32000 times this value. */
-#define TIMER_PRESCALER_MAX_VALUE      (0xFFFF-1)           /* Timer prescaler maximum value (0xFFFF for a timer 16 bits) */
-#endif /* ADC_TRIGGER_FROM_TIMER */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,6 +43,9 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
+
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
@@ -66,7 +63,6 @@ __IO uint16_t   aADCxConvertedValues[ADCCONVERTEDVALUES_BUFFER_SIZE];
 uint8_t         ubAnalogWatchdogStatus = RESET;  /* Set into analog watchdog interrupt callback */
 
 /* Variables to manage push button on board: interface between ExtLine interruption and main program */
-uint8_t         ubUserButtonClickCount = 0;      /* Count number of clicks: Incremented after User Button interrupt */
 __IO uint8_t    ubUserButtonClickEvent = RESET;  /* Event detection: Set after User Button interrupt */
 
 /* USER CODE END PV */
@@ -74,14 +70,37 @@ __IO uint8_t    ubUserButtonClickEvent = RESET;  /* Event detection: Set after U
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#ifdef __GNUC__
+#define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#else
+#define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
+#endif /* __GNUC__ */
 
+/**
+* @brief  Retargets the C library printf function to the USART.
+* @param  None
+* @retval None
+*/
+PUTCHAR_PROTOTYPE
+{
+  /* Place your implementation of fputc here */
+  /* e.g. write a character to the UART2 and Loop until the end of transmission */
+  if (ch == '\n')
+    HAL_UART_Transmit (&huart2, (uint8_t *) "\r", 1, 0xFFFF);
+
+  HAL_UART_Transmit (&huart2, (uint8_t *) & ch, 1, 0xFFFF);
+
+  return ch;
+}
 /* USER CODE END 0 */
 
 /**
@@ -112,8 +131,33 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
+  /* Run the ADC calibration */
+  if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
+  {
+    /* Calibration Error */
+    Error_Handler();
+  }
+
+  /* Note: This example, on some other STM32 boards, is performing            */
+  /*       DAC signal generation here.                                        */
+  /*       On STM32F103RB-Nucleo, the device has no DAC available,            */
+  /*       therefore analog signal must be supplied externally.               */
+
+  /*## Start ADC conversions #################################################*/
+
+  /* Start ADC conversion on regular group with transfer by DMA */
+  if (HAL_ADC_Start_DMA(&hadc1,
+                        (uint32_t *)aADCxConvertedValues,
+                        ADCCONVERTEDVALUES_BUFFER_SIZE
+  ) != HAL_OK)
+  {
+    /* Start Error */
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -121,6 +165,37 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    /* Turn-on/off LED2 in function of ADC conversion result */
+    /*  - Turn-off if voltage is into AWD window */
+    /*  - Turn-on if voltage is out of AWD window */
+
+    /* Variable of analog watchdog status is set into analog watchdog         */
+    /* interrupt callback                                                     */
+    if (ubAnalogWatchdogStatus == RESET)
+    {
+      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+    }
+    else
+    {
+      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+
+      printf("ADC=%d\n", HAL_ADC_GetValue(&hadc1));
+      /* Reset analog watchdog status for next loop iteration */
+      ubAnalogWatchdogStatus = RESET;
+    }
+
+    /* For information: ADC conversion results are stored into array          */
+    /* "aADCxConvertedValues" (for debug: check into watch window)            */
+
+    /* Wait for event on push button to perform following actions */
+    while ((ubUserButtonClickEvent) == RESET)
+    {
+    }
+    /* Reset variable for next loop iteration */
+    ubUserButtonClickEvent = RESET;
+
+    printf("ADC=%d\n", HAL_ADC_GetValue(&hadc1));
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -136,6 +211,7 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -164,6 +240,71 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV8;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_AnalogWDGConfTypeDef AnalogWDGConfig = {0};
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Common config
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analog WatchDog 1
+  */
+  AnalogWDGConfig.WatchdogMode = ADC_ANALOGWATCHDOG_ALL_REG;
+  AnalogWDGConfig.HighThreshold = 2559;
+  AnalogWDGConfig.LowThreshold = 512;
+  AnalogWDGConfig.ITMode = ENABLE;
+  if (HAL_ADC_AnalogWDGConfig(&hadc1, &AnalogWDGConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_4;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_41CYCLES_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
 }
 
 /**
@@ -196,6 +337,22 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 2 */
 
   /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 
 }
 
@@ -248,20 +405,55 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   {
     /* Set variable to report push button event to main program */
     ubUserButtonClickEvent = SET;
-
-    /* Manage ubUserButtonClickCount to increment it circularly from 0 to     */
-    /* maximum value defined                                                  */
-    if (ubUserButtonClickCount < USERBUTTON_CLICK_COUNT_MAX)
-    {
-      ubUserButtonClickCount++;
-    }
-    else
-    {
-      ubUserButtonClickCount=0;
-    }
-
   }
 }
+
+/**
+  * @brief  Conversion complete callback in non blocking mode
+  * @param  AdcHandle : AdcHandle handle
+  * @note   This example shows a simple way to report end of conversion
+  *         and get conversion result. You can add your own implementation.
+  * @retval None
+  */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *AdcHandle)
+{
+
+}
+
+/**
+  * @brief  Conversion DMA half-transfer callback in non blocking mode
+  * @param  hadc: ADC handle
+  * @retval None
+  */
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc)
+{
+
+}
+
+/**
+  * @brief  Analog watchdog callback in non blocking mode.
+  * @param  hadc: ADC handle
+  * @retval None
+  */
+  void HAL_ADC_LevelOutOfWindowCallback(ADC_HandleTypeDef* hadc)
+{
+  /* Set variable to report analog watchdog out of window status to main      */
+  /* program.                                                                 */
+  ubAnalogWatchdogStatus = SET;
+}
+
+/**
+  * @brief  ADC error callback in non blocking mode
+  *        (ADC conversion with interruption or transfer by DMA)
+  * @param  hadc: ADC handle
+  * @retval None
+  */
+void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
+{
+  /* In case of ADC error, call main error handler */
+  Error_Handler();
+}
+
 /* USER CODE END 4 */
 
 /**
